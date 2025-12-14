@@ -12,6 +12,7 @@ from app.api.cart import router as cart_router
 from app.api.orders import router as orders_router
 from app.api.errors import router as test_router
 from app.api.health import router as health_router
+from app.core.rate_limit_middleware import RateLimitMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.error_handlers import (
@@ -19,6 +20,9 @@ from app.core.error_handlers import (
     validation_exception_handler,
     unhandled_exception_handler,
 )
+
+
+
 settings = get_settings()
 
 app = FastAPI(
@@ -35,13 +39,6 @@ app.add_middleware(
 )
 
 
-@app.get("/api/v1/health", tags=["system"])
-def health_check():
-    return {
-        "status": "OK",
-        "version": settings.VERSION,
-        "env": settings.ENV,
-    }
 
 
 # ★ users 라우터 등록
@@ -60,3 +57,4 @@ app.include_router(health_router)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
+app.add_middleware(RateLimitMiddleware, max_requests=30, window_seconds=10)

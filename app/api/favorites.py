@@ -1,11 +1,11 @@
 # app/api/favorites.py
-
+import math
 from datetime import datetime, timezone
 from typing import List
-
+from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-
+from app.schemas.common import FavoriteListPage
 from app.db import get_db
 from app.models.books import Favorite, Book
 from app.models.users import User
@@ -72,39 +72,49 @@ def add_favorite(
 
 
 # 601. 내 위시리스트 조회
-@router.get(
-    "",
-    response_model=List[FavoriteRead],
-    summary="내 위시리스트 조회",
-)
+@router.get("", response_model=FavoriteListPage)
 def list_favorites(
     page: int = 0,
     size: int = 20,
+    sort: str = Query("created_at,desc"),  # 추가
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    q = (
+    base_q = (
         db.query(Favorite, Book)
         .join(Book, Favorite.book_id == Book.book_id)
-        .filter(    Favorite.user_id == current_user.user_id,
-    Favorite.deleted_at.is_(None),   # 이거!
-)
-        .order_by(Favorite.favorite_id.desc())
-        .offset(page * size)
-        .limit(size)
+        .filter(
+            Favorite.user_id == current_user.user_id,
+            Favorite.deleted_at.is_(None),
+        )
     )
 
-    rows = q.all()
+    field, direction = (sort.split(",") + ["desc"])[:2]
+    direction = direction.lower()
+    sort_map = {
+        "favorite_id": Favorite.favorite_id,
+        "created_at": Favorite.created_at,
+    }
+    col = sort_map.get(field, Favorite.created_at)
 
-    # rows: [(favorite, book), ...]
-    return [
-        {
-            "favorite_id": fav.favorite_id,
-            "book_id": book.book_id,
-            "title": book.title,
-        }
+
+    total = base_q.with_entities(func.count(func.distinct(Favorite.favorite_id))).scalar()
+    ordered_q = base_q.order_by(col.asc() if direction == "asc" else col.desc())
+    rows = ordered_q.offset(page * size).limit(size).all()
+    total_pages = (total + size - 1) // size
+    content = [
+        {"favorite_id": fav.favorite_id, "book_id": book.book_id, "title": book.title}
         for fav, book in rows
     ]
+
+    return {
+    "content": content,
+    "page": page,
+    "size": size,
+    "totalElements": total,
+    "totalPages": total_pages,
+    "sort": sort,
+    }
 
 
 # 602. 즐겨찾기 삭제 (멱등)

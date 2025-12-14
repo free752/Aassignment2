@@ -1,65 +1,80 @@
 # app/api/books.py
 from typing import List, Optional
+import math
 from app.models.users import User
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_,asc, desc
 from app.db import get_db
 from app.core.security import require_admin
 from app.schemas.authors import AuthorRead
 from app.schemas.books import BookCreate, BookUpdateFull, BookUpdatePartial, BookRead, BookPut
 from app.core.security import get_current_user, get_current_admin  # 이미 있는 함수 재사용
 from app.models.books import Book, Author
+from pydantic import BaseModel
 
+from app.core.error_codes import raise_http, ErrorCode
 from sqlalchemy.exc import IntegrityError
 
+class BookPage(BaseModel):
+    content: list[BookRead]
+    page: int
+    size: int
+    totalElements: int
+    totalPages: int
+    sort: str
 router = APIRouter(prefix="/api/v1/books", tags=["books"])
 
-@router.put("/{book_id}")
-def put_book(book_id: int, body: BookPut, db: Session = Depends(get_db), _admin=Depends(require_admin)):
-    book = db.query(Book).filter(Book.book_id == book_id).first()
-    if not book:
-        raise HTTPException(status_code=404, detail="BOOK_NOT_FOUND")
 
-    data = body.model_dump(exclude_none=True)
 
-    # ✅ author_id가 들어왔으면 미리 존재 여부 검사
-    if "author_id" in data:
-        author = db.query(Author).filter(Author.author_id == data["author_id"]).first()
-        if not author:
-            raise HTTPException(status_code=400, detail="INVALID_AUTHOR_ID")
-
-    for k, v in data.items():
-        setattr(book, k, v)
-
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        # 혹시 다른 FK/UNIQUE 터져도 400으로 정리
-        raise HTTPException(status_code=400, detail="INVALID_REQUEST")
-    db.refresh(book)
-
-    return {"isSuccess": True, "message": "OK", "payload": {"book_id": book.book_id}}
-
-@router.get("", response_model=list[BookRead], summary="전체 도서 목록 조회 (부분 검색)")
+@router.get("", summary="전체 도서 목록 조회 (부분 검색)")
 def list_books(
-        keyword: Optional[str] = Query(None, description="제목 / 설명 검색 (부분 일치)"),
-        db: Session = Depends(get_db),
-        current_user=Depends(get_current_user), # 관리자 전용이면 유지
+    db: Session = Depends(get_db),
+    keyword: str | None = Query(None),
+    page: int = Query(0, ge=0),
+    size: int = Query(20, ge=1, le=100),
+    sort: str = Query("created_at,desc"),  # e.g. title,asc / price,desc / created_at,desc
 ):
     query = db.query(Book)
 
     if keyword:
         like = f"%{keyword}%"
-        query = query.filter(
-            or_(Book.title.like(like), Book.description.like(like))
-        )
+        query = query.filter((Book.title.ilike(like)) | (Book.description.ilike(like)))
 
-    books = query.order_by(Book.book_id.desc()).all()
+    total = query.count()
 
-    # ✅ 반드시 리스트를 리턴해야 함
-    return books
+    # sort 파싱
+    field, direction = (sort.split(",") + ["desc"])[:2]
+    direction = direction.lower()
+
+    sort_map = {
+        "created_at": Book.created_at,
+        "title": Book.title,
+        "price": Book.price,
+    }
+    col = sort_map.get(field, Book.created_at)
+    query = query.order_by(col.asc() if direction == "asc" else col.desc())
+
+    items = (
+        query.offset(page * size)
+             .limit(size)
+             .all()
+    )
+
+    total_pages = math.ceil(total / size) if size else 0
+
+    return {
+        "isSuccess": True,
+        "message": "OK",
+        "payload": {
+            "content": items,
+            "page": page,
+            "size": size,
+            "totalElements": total,
+            "totalPages": total_pages,
+            "sort": sort,
+        },
+    }
 
 @router.get("/{book_id}", response_model=BookRead, summary="도서 상세 조회")
 def get_book(book_id: int, db: Session = Depends(get_db)):
@@ -84,7 +99,7 @@ def update_book_full(
     book_id: int,
     payload: BookUpdateFull,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(get_current_admin),
+    _admin: User = Depends(require_admin),
 ):
     book = db.query(Book).filter(Book.book_id == book_id).first()
     if not book:
@@ -179,3 +194,35 @@ def get_book_author(
         raise HTTPException(status_code=404, detail="Author not found")
 
     return book.author
+
+@router.post(
+    "",
+    response_model=BookRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="도서 생성 (ADMIN)",
+)
+def create_book(
+    payload: BookCreate,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),  # ADMIN만
+):
+    # author_id 유효성 검사
+    author = db.query(Author).filter(Author.author_id == payload.author_id).first()
+    if not author:
+        raise_http(
+            ErrorCode.INVALID_AUTHOR_ID,
+            details={"author_id": payload.author_id},
+            status_code=400,
+        )
+
+    book = Book(**payload.model_dump())
+
+    db.add(book)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise_http(ErrorCode.CONFLICT, message="duplicate constraint", status_code=409)
+
+    db.refresh(book)
+    return book

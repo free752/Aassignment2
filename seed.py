@@ -5,8 +5,10 @@ from datetime import datetime
 
 from sqlalchemy import func
 from app.db import SessionLocal
-from app.core.security import get_password_hash
+from passlib.context import CryptContext
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+from datetime import date
 from app.models.users import User
 from app.models.books import Author, Book, Favorite
 from app.models.carts import Cart, CartItem
@@ -24,14 +26,14 @@ def ensure_admin(db):
 
     admin = User(
         email="admin@example.com",
-        password=get_password_hash("P@ssw0rd!"),
+        password=pwd_context.hash("P@ssw0rd!"),
         name="Admin",
-        role="admin",
+        role="ADMIN",
         is_korean=True,
         address="Seoul",
         phone_number="01000000000",
-        birth_date="2000-01-01",
-        gender="M",
+        gender="male",
+        birth_date=date(2000, 1, 1),
         profile="seed admin",
     )
     db.add(admin)
@@ -40,28 +42,41 @@ def ensure_admin(db):
     return admin
 
 
-def ensure_users(db, target_users=30):
-    existing = db.query(func.count(User.user_id)).scalar() or 0
-    need = max(0, target_users - existing)
 
-    for i in range(need):
-        idx = existing + i + 1
+
+def ensure_users(db, target_users=30):
+    # 이미 있는 이메일 세트
+    existing_emails = set(
+        e for (e,) in db.query(User.email).all()
+    )
+
+    created = 0
+    n = 1
+    while created < target_users:
+        email = f"user{n}@example.com"
+        n += 1
+
+        if email in existing_emails:
+            continue
+
         u = User(
-            email=f"user{idx}@example.com",
-            password=get_password_hash("P@ssw0rd!"),
-            name=f"User{idx}",
-            role="user",
+            email=email,
+            password=pwd_context.hash("P@ssw0rd!"),
+            name=f"User{n-1}",
+            role="USER",
             is_korean=True,
             address=f"Addr {_rand_word(6)}",
             phone_number=f"010{random.randint(10000000, 99999999)}",
-            birth_date="2000-01-01",
-            gender=random.choice(["M", "F"]),
+            birth_date=date(2000, 1, 1),
+            gender=random.choice(["male", "female"]),  # 너 DB가 male/female 허용하는 상태
             profile="seed user",
+            status="active",
         )
         db.add(u)
+        existing_emails.add(email)
+        created += 1
 
     db.commit()
-
 
 def ensure_authors(db, target_authors=50):
     existing = db.query(func.count(Author.author_id)).scalar() or 0
@@ -163,11 +178,27 @@ def ensure_orders(db, max_orders_per_user=2, max_items_per_order=3):
             db.flush()  # order_id 확보
 
             picks = random.sample(book_ids, k=min(random.randint(1, max_items_per_order), len(book_ids)))
+
+            # ✅ picks에 해당하는 책 제목을 한 번에 조회해서 매핑
+            title_map = {
+                bid: title
+                for bid, title in db.query(Book.book_id, Book.title).filter(Book.book_id.in_(picks)).all()
+            }
+
             total_items = 0
             for bid in picks:
                 qty = random.randint(1, 3)
                 total_items += qty
-                db.add(OrderItem(order_id=order.order_id, book_id=bid, quantity=qty))
+
+                safe_title = title_map.get(bid) or f"Book {bid}"  # ✅ 절대 None 안 되게
+                db.add(
+                    OrderItem(
+                        order_id=order.order_id,
+                        book_id=bid,
+                        title=safe_title,     # ✅ 추가
+                        quantity=qty
+                    )
+                )
 
             order.total_items = total_items
 

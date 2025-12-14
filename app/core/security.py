@@ -99,18 +99,17 @@ def get_current_admin(current_user: User = Depends(get_current_user),
 ) -> User:
 
     # role 컬럼이 'admin'인 경우만 허용 (DB에 admin 계정 role='admin' 으로 저장돼 있어야 함)
-    if current_user.role != "admin":
+    if (current_user.role or "").lower() != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin only endpoint",
+            detail="Admin only",
         )
     return current_user
 
 def require_admin(current_user = Depends(get_current_user)):
-    # role 값이 "admin"인 걸로 쓰고 있다 했지?
-    if getattr(current_user, "role", None) != "admin":
+    if (current_user.role or "").lower() != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="FORBIDDEN"
+            detail="Admin only"
         )
     return current_user

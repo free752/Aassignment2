@@ -1,6 +1,7 @@
 # app/api/authors.py
 from typing import List, Optional
-
+from app.schemas.common import AuthorListPage
+import math
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -53,18 +54,12 @@ def create_author(
 # -----------------------------------------------
 # 2) 작가 목록 조회 (검색 + 페이지네이션, USER 이상)
 # -----------------------------------------------
-@router.get(
-    "",
-    response_model=List[AuthorRead],
-    summary="List Authors",
-)
+@router.get("", response_model=AuthorListPage)
 def list_authors(
-    keyword: Optional[str] = Query(
-        default=None,
-        description="이름 / 프로필 검색 (부분 일치)",
-    ),
-    page: int = Query(0, ge=0, description="페이지 번호 (0부터 시작)"),
-    size: int = Query(20, ge=1, le=100, description="페이지 크기"),
+    keyword: Optional[str] = Query(default=None, description="이름 / 프로필 검색 (부분 일치)"),
+    page: int = Query(0, ge=0),
+    size: int = Query(20, ge=1, le=100),
+    sort: str = Query("author_id,desc"),  # 추가
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
@@ -72,21 +67,30 @@ def list_authors(
 
     if keyword:
         like = f"%{keyword}%"
-        query = query.filter(
-            or_(
-                Author.name.like(like),
-                Author.profile.like(like),
-            )
-        )
+        query = query.filter(or_(Author.name.like(like), Author.profile.like(like)))
 
-    authors = (
-        query.order_by(Author.author_id.desc())
-        .offset(page * size)
-        .limit(size)
-        .all()
-    )
+    field, direction = (sort.split(",") + ["desc"])[:2]
+    direction = direction.lower()
 
-    return authors
+    sort_map = {
+        "author_id": Author.author_id,
+        "name": Author.name,
+    }
+    col = sort_map.get(field, Author.author_id)
+    query = query.order_by(col.asc() if direction == "asc" else col.desc())
+
+    total = query.order_by(None).count()
+    items = query.offset(page * size).limit(size).all()
+    total_pages = (total + size - 1) // size
+
+    return {
+        "content": items,
+        "page": page,
+        "size": size,
+        "totalElements": total,
+        "totalPages": total_pages,
+        "sort": sort,
+    }
 
 
 # ---------------------------

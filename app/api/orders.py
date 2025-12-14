@@ -8,6 +8,10 @@ from app.models.books import Book
 from app.models.carts import Cart, CartItem
 from app.models.orders import Order, OrderItem
 from app.schemas.orders import OrderRead, OrderListRead, OrderItemRead
+from app.schemas.common import OrderListPage
+import math
+
+
 
 router = APIRouter(prefix="/api/v1/orders", tags=["orders"])
 def require_admin(current_user = Depends(get_current_user)):
@@ -70,6 +74,60 @@ def create_order_from_cart(
         items=items_out,
     )
 
+@router.get("/admin", response_model=OrderListPage)
+def admin_list_orders(
+    status_filter: str | None = Query(None, alias="status"),
+    page: int = Query(0, ge=0),
+    size: int = Query(20, ge=1, le=100),
+    sort: str = Query("order_id,desc"),
+    db: Session = Depends(get_db),
+    admin_user=Depends(require_admin),
+):
+    q = db.query(Order)
+
+    if status_filter:
+        q = q.filter(Order.status == status_filter)
+
+    # sort 파싱: "field,asc|desc"
+    field, direction = (sort.split(",") + ["desc"])[:2]
+    direction = direction.lower()
+
+    sort_map = {
+        "order_id": Order.order_id,
+        "created_at": Order.created_at,
+        "user_id": Order.user_id,
+        "status": Order.status,
+        "total_items": Order.total_items,
+    }
+    col = sort_map.get(field, Order.order_id)
+    q = q.order_by(col.asc() if direction == "asc" else col.desc())
+
+    # totalElements / totalPages 계산은 offset/limit 전에
+    total = q.order_by(None).count()
+    orders = q.offset(page * size).limit(size).all()
+
+    content = [
+        {
+            "order_id": o.order_id,
+            "user_id": o.user_id,
+            "status": o.status,
+            "total_items": o.total_items,
+        }
+        for o in orders
+    ]
+
+    total = q.order_by(None).count()
+    items = q.offset(page * size).limit(size).all()
+    total_pages = (total + size - 1) // size
+
+    return {
+        "content": items,
+        "page": page,
+        "size": size,
+        "totalElements": total,
+        "totalPages": total_pages,
+        "sort": sort,
+    }
 
 @router.get("", status_code=status.HTTP_200_OK)
 def list_my_orders(
@@ -180,23 +238,4 @@ def approve_cancel(
         "message": "CANCEL_APPROVED",
     }
 
-# (선택) 관리자 주문 전체 조회 (원하면 Swagger 테스트 편해짐)
-@router.get("/admin", status_code=status.HTTP_200_OK)
-def admin_list_orders(
-    status_filter: str | None = Query(None, alias="status"),
-    db: Session = Depends(get_db),
-    admin_user=Depends(require_admin),
-):
-    q = db.query(Order).order_by(Order.order_id.desc())
-    if status_filter:
-        q = q.filter(Order.status == status_filter)
-    orders = q.all()
-    return [
-        {
-            "order_id": o.order_id,
-            "user_id": o.user_id,
-            "status": o.status,
-            "total_items": o.total_items,
-        }
-        for o in orders
-    ]
+

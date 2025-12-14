@@ -1,7 +1,8 @@
 # app/api/users.py
 from typing import Optional
+from app.schemas.common import UserListPage
 from typing import List
-
+import math
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
 from pydantic import BaseModel
 from datetime import datetime
@@ -11,7 +12,6 @@ from app.schemas.users import UserCreate, UserRead, UserUpdateFull, UserUpdatePa
 from app.core.security import hash_password
 from app.core.security import get_current_admin
 from sqlalchemy.orm import Session
-
 from app.db import get_db
 from app.core.security import get_current_user
 
@@ -87,34 +87,7 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     return user
 
 
-@router.get(
-    path="",
-    response_model=list[UserRead],
-    summary="전체 사용자 목록 (ADMIN)",
-)
-def list_users(
-    db: Session = Depends(get_db),
-    current_admin: User = Depends(get_current_admin),  # ★ 여기
-    page: int = Query(0, ge=0),
-    size: int = Query(20, gt=0, le=100),
-    keyword: Optional[str] = Query(None),
-):
-    query = db.query(User)
 
-    if keyword:
-        like = f"%{keyword}%"
-        query = query.filter(
-            (User.name.ilike(like)) | (User.email.ilike(like))
-        )
-
-    users = (
-        query
-        .order_by(User.created_at.desc())
-        .offset(page * size)
-        .limit(size)
-        .all()
-    )
-    return users
 
 @router.put("/me", response_model=UserRead)
 def update_me_full(
@@ -177,30 +150,47 @@ def delete_me_permanent(
     db.commit()
     return
 
-@router.get("", response_model=list[UserRead], summary="전체 사용자 목록 (ADMIN)")
+@router.get("", response_model=UserListPage)
 def list_users(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
     page: int = Query(0, ge=0),
     size: int = Query(20, ge=1, le=100),
     keyword: Optional[str] = Query(None),
+    sort: str = Query("created_at,desc"),  # 추가
 ):
     query = db.query(User)
 
     if keyword:
         like = f"%{keyword}%"
-        query = query.filter(
-            (User.name.ilike(like)) | (User.email.ilike(like))
-        )
+        query = query.filter((User.name.ilike(like)) | (User.email.ilike(like)))
 
-    users = (
-        query
-        .order_by(User.created_at.desc())
-        .offset(page * size)
-        .limit(size)
-        .all()
-    )
-    return users
+    field, direction = (sort.split(",") + ["desc"])[:2]
+    direction = direction.lower()
+    sort_map = {
+        "created_at": User.created_at,
+        "user_id": User.user_id,
+        "name": User.name,
+        "email": User.email,
+        "status": User.status,
+        "role": User.role,
+    }
+    col = sort_map.get(field, User.created_at)
+    query = query.order_by(col.asc() if direction == "asc" else col.desc())
+
+
+    items = query.offset(page * size).limit(size).all()
+    total = query.order_by(None).count()
+    total_pages = (total + size - 1) // size
+
+    return {
+        "content": items,
+        "page": page,
+        "size": size,
+        "totalElements": total,
+        "totalPages": total_pages,
+        "sort": sort,
+    }
 
 
 # 2) 특정 사용자 상세 조회 (ADMIN)
