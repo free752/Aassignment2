@@ -16,7 +16,10 @@ from app.models.users import User
 from app.schemas.auth import TokenPayload
 settings = get_settings()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(
+    schemes=["bcrypt_sha256", "bcrypt"],  # 기존 bcrypt 해시도 검증되게 유지
+    deprecated="auto",
+)
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl="/api/v1/auth/login"   # 로그인 엔드포인트 경로
