@@ -30,10 +30,11 @@ router = APIRouter(prefix="/api/v1/books", tags=["books"])
 @router.get("", summary="전체 도서 목록 조회 (부분 검색)")
 def list_books(
     db: Session = Depends(get_db),
-    keyword: str | None = Query(None),
-    page: int = Query(0, ge=0),
-    size: int = Query(20, ge=1, le=100),
-    sort: str = Query("created_at,desc"),  # e.g. title,asc / price,desc / created_at,desc
+    current_user: User = Depends(get_current_user),
+    keyword: str | None = None,
+    page: int = 0,
+    size: int = 20,
+    sort: str = "created_at,desc",
 ):
     query = db.query(Book)
 
