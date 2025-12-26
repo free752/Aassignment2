@@ -1,5 +1,3 @@
-# app/main.py
-from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import favorites
 from app.core.config import get_settings
@@ -22,7 +20,7 @@ from app.core.error_handlers import (
     validation_exception_handler,
     unhandled_exception_handler,
 )
-
+import os
 
 
 settings = get_settings()
@@ -43,9 +41,8 @@ app.add_middleware(
 
 
 
-# ★ users 라우터 등록
-app.include_router(users_router)
 
+app.include_router(users_router)
 app.include_router(auth_router)
 
 app.include_router(reviews_router)
@@ -60,4 +57,5 @@ app.include_router(health_router)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
-app.add_middleware(RateLimitMiddleware, max_requests=30, window_seconds=10)
+if os.getenv("TESTING") != "1":
+    app.add_middleware(RateLimitMiddleware, max_requests=30, window_seconds=10)
